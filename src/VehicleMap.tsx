@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Polyline, Marker } from 'react-leaflet';
+import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
-import { type RoutePoint, calculateSpeedKmH, calculateTotalDistance } from './utils';
 
 // Fix for default markers in react-leaflet
 import icon from 'leaflet/dist/images/marker-icon.png';
@@ -18,94 +17,129 @@ const DefaultIcon = L.icon({
 
 L.Marker.prototype.options.icon = DefaultIcon;
 
-const INITIAL_CENTER: [number, number] = [17.385044, 78.486671];
+// Center point between Koti and KPHB
+const INITIAL_CENTER: [number, number] = [17.3950, 78.5000];
 
 // Vehicle icon using emoji
 const vehicleIcon = L.divIcon({
   className: 'vehicle-icon',
-  html: '<div style="font-size: 24px; text-align: center;">🚗</div>',
-  iconSize: [30, 30],
-  iconAnchor: [15, 15]
+  html: '<div style="font-size: 32px; text-align: center; filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.5));">🚗</div>',
+  iconSize: [40, 40],
+  iconAnchor: [20, 20]
 });
 
-interface VehicleMapProps {}
+// Start marker icon
+const startIcon = L.divIcon({
+  className: 'start-icon',
+  html: '<div style="font-size: 28px;">📍</div>',
+  iconSize: [35, 35],
+  iconAnchor: [17, 35]
+});
 
-const VehicleMap: React.FC<VehicleMapProps> = () => {
+// End marker icon
+const endIcon = L.divIcon({
+  className: 'end-icon',
+  html: '<div style="font-size: 28px;">🎯</div>',
+  iconSize: [35, 35],
+  iconAnchor: [17, 35]
+});
+
+interface RoutePoint {
+  lat: number;
+  lng: number;
+  timestamp: string;
+}
+
+const VehicleMap: React.FC = () => {
   const [routeData, setRouteData] = useState<RoutePoint[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const intervalRef = useRef<number | null>(null);
 
-  // Fetch route data on component mount
+  // Fetch real route from OSRM on component mount
   useEffect(() => {
-    const loadData = async () => {
+    const fetchRoute = async () => {
       try {
-        setLoading(true);
-        // Use import.meta.env.BASE_URL for correct path in both dev and production
-        const baseUrl = import.meta.env.BASE_URL || '/';
-        const response = await fetch(`${baseUrl}dummy-route.json`);
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
-
-        // Transform data into required format
-        const transformedData: RoutePoint[] = data.map((p: any) => ({
-          lat: p.latitude,
-          lng: p.longitude,
-          timestamp: p.timestamp
-        }));
-
-        setRouteData(transformedData);
-        setError(null);
-      } catch (error) {
-        console.error("Error loading route data:", error);
-        // Try fallback path if the first attempt fails
-        try {
-          const fallbackResponse = await fetch('./dummy-route.json');
-          if (fallbackResponse.ok) {
-            const fallbackData = await fallbackResponse.json();
-            const transformedData: RoutePoint[] = fallbackData.map((p: any) => ({
-              lat: p.latitude,
-              lng: p.longitude,
-              timestamp: p.timestamp
-            }));
-            setRouteData(transformedData);
-            setError(null);
-            return;
-          }
-        } catch (fallbackError) {
-          console.error("Fallback also failed:", fallbackError);
-        }
-        setError("Failed to load route data. The application will use sample data instead.");
+        // OSRM API - real road routing
+        const response = await fetch(
+          'https://router.project-osrm.org/route/v1/driving/78.4866,17.3850;78.5260,17.4170?geometries=geojson&overview=full'
+        );
         
-        // Use embedded sample data as last resort
-        const sampleData: RoutePoint[] = [
-          { lat: 17.385044, lng: 78.486671, timestamp: "2024-07-20T10:00:00Z" },
-          { lat: 17.385200, lng: 78.486800, timestamp: "2024-07-20T10:00:10Z" },
-          { lat: 17.385450, lng: 78.487100, timestamp: "2024-07-20T10:00:20Z" },
-          { lat: 17.385680, lng: 78.487350, timestamp: "2024-07-20T10:00:30Z" },
-          { lat: 17.385850, lng: 78.487580, timestamp: "2024-07-20T10:00:40Z" },
-          { lat: 17.386020, lng: 78.487800, timestamp: "2024-07-20T10:00:50Z" },
-          { lat: 17.386180, lng: 78.488050, timestamp: "2024-07-20T10:01:00Z" },
-          { lat: 17.386350, lng: 78.488250, timestamp: "2024-07-20T10:01:10Z" },
-          { lat: 17.386520, lng: 78.488480, timestamp: "2024-07-20T10:01:20Z" },
-          { lat: 17.386680, lng: 78.488720, timestamp: "2024-07-20T10:01:30Z" }
-        ];
-        setRouteData(sampleData);
-      } finally {
-        setLoading(false);
+        if (!response.ok) throw new Error('Failed to fetch route');
+        
+        const data = await response.json();
+        
+        if (data.code === 'Ok' && data.routes && data.routes[0]) {
+          const route = data.routes[0];
+          const coordinates = route.geometry.coordinates;
+          const duration = route.duration;
+
+          // Convert coordinates to RoutePoint array
+          const points: RoutePoint[] = coordinates.map((coord: number[], index: number) => {
+            const timeProgress = index / (coordinates.length - 1);
+            const pointTime = duration * timeProgress;
+            const timestamp = new Date(new Date('2024-07-20T10:00:00Z').getTime() + pointTime * 1000);
+
+            return {
+              lat: coord[1],
+              lng: coord[0],
+              timestamp: timestamp.toISOString()
+            };
+          });
+
+          setRouteData(points);
+          setLoading(false);
+          return;
+        }
+      } catch (error) {
+        console.log('OSRM fetch failed, using fallback route');
       }
+
+      // Fallback route if OSRM fails
+      const fallbackRoute: RoutePoint[] = [
+        { lat: 17.3850, lng: 78.4866, timestamp: '2024-07-20T10:00:00Z' },
+        { lat: 17.3855, lng: 78.4875, timestamp: '2024-07-20T10:00:15Z' },
+        { lat: 17.3862, lng: 78.4885, timestamp: '2024-07-20T10:00:30Z' },
+        { lat: 17.3870, lng: 78.4895, timestamp: '2024-07-20T10:00:45Z' },
+        { lat: 17.3880, lng: 78.4905, timestamp: '2024-07-20T10:01:00Z' },
+        { lat: 17.3890, lng: 78.4920, timestamp: '2024-07-20T10:01:15Z' },
+        { lat: 17.3900, lng: 78.4930, timestamp: '2024-07-20T10:01:30Z' },
+        { lat: 17.3912, lng: 78.4940, timestamp: '2024-07-20T10:01:45Z' },
+        { lat: 17.3925, lng: 78.4945, timestamp: '2024-07-20T10:02:00Z' },
+        { lat: 17.3938, lng: 78.4950, timestamp: '2024-07-20T10:02:15Z' },
+        { lat: 17.3950, lng: 78.4960, timestamp: '2024-07-20T10:02:30Z' },
+        { lat: 17.3962, lng: 78.4975, timestamp: '2024-07-20T10:02:45Z' },
+        { lat: 17.3975, lng: 78.4990, timestamp: '2024-07-20T10:03:00Z' },
+        { lat: 17.3988, lng: 78.5005, timestamp: '2024-07-20T10:03:15Z' },
+        { lat: 17.4000, lng: 78.5020, timestamp: '2024-07-20T10:03:30Z' },
+        { lat: 17.4012, lng: 78.5040, timestamp: '2024-07-20T10:03:45Z' },
+        { lat: 17.4025, lng: 78.5060, timestamp: '2024-07-20T10:04:00Z' },
+        { lat: 17.4038, lng: 78.5080, timestamp: '2024-07-20T10:04:15Z' },
+        { lat: 17.4050, lng: 78.5100, timestamp: '2024-07-20T10:04:30Z' },
+        { lat: 17.4062, lng: 78.5120, timestamp: '2024-07-20T10:04:45Z' },
+        { lat: 17.4075, lng: 78.5140, timestamp: '2024-07-20T10:05:00Z' },
+        { lat: 17.4088, lng: 78.5160, timestamp: '2024-07-20T10:05:15Z' },
+        { lat: 17.4100, lng: 78.5180, timestamp: '2024-07-20T10:05:30Z' },
+        { lat: 17.4112, lng: 78.5195, timestamp: '2024-07-20T10:05:45Z' },
+        { lat: 17.4125, lng: 78.5210, timestamp: '2024-07-20T10:06:00Z' },
+        { lat: 17.4138, lng: 78.5225, timestamp: '2024-07-20T10:06:15Z' },
+        { lat: 17.4150, lng: 78.5240, timestamp: '2024-07-20T10:06:30Z' },
+        { lat: 17.4160, lng: 78.5250, timestamp: '2024-07-20T10:06:45Z' },
+        { lat: 17.4170, lng: 78.5260, timestamp: '2024-07-20T10:07:00Z' }
+      ];
+
+      setRouteData(fallbackRoute);
+      setLoading(false);
     };
-    loadData();
+
+    fetchRoute();
   }, []);
 
   // Simulation effect
   useEffect(() => {
     if (isPlaying && routeData.length > 0 && currentIndex < routeData.length - 1) {
-      intervalRef.current = setInterval(() => {
+      intervalRef.current = window.setInterval(() => {
         setCurrentIndex(prevIndex => {
           if (prevIndex >= routeData.length - 1) {
             setIsPlaying(false);
@@ -113,7 +147,7 @@ const VehicleMap: React.FC<VehicleMapProps> = () => {
           }
           return prevIndex + 1;
         });
-      }, 2000); // Update every 2 seconds
+      }, 300);
     } else {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
@@ -121,21 +155,18 @@ const VehicleMap: React.FC<VehicleMapProps> = () => {
       }
     }
 
-    // Cleanup function
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
-        intervalRef.current = null;
       }
     };
-  }, [isPlaying, currentIndex, routeData]);
+  }, [isPlaying, currentIndex, routeData.length]);
 
-  const currentPosition = routeData[currentIndex] || routeData[0];
+  const currentPosition = routeData[currentIndex] || { lat: 17.3850, lng: 78.4866, timestamp: '2024-07-20T10:00:00Z' };
 
   // Control handlers
   const togglePlay = () => {
     if (currentIndex >= routeData.length - 1) {
-      // If at the end, reset and start from beginning
       setCurrentIndex(0);
       setIsPlaying(true);
     } else {
@@ -148,160 +179,241 @@ const VehicleMap: React.FC<VehicleMapProps> = () => {
     setCurrentIndex(0);
   };
 
+  // Calculate distance between two points
+  const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number) => {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  // Calculate total distance
+  const getTotalDistance = () => {
+    let total = 0;
+    for (let i = 0; i < currentIndex; i++) {
+      total += calculateDistance(
+        routeData[i].lat,
+        routeData[i].lng,
+        routeData[i + 1].lat,
+        routeData[i + 1].lng
+      );
+    }
+    return total;
+  };
+
+  // Calculate speed
+  const getSpeed = () => {
+    if (currentIndex === 0) return '0.00';
+    const prev = routeData[currentIndex - 1];
+    const curr = routeData[currentIndex];
+    const distance = calculateDistance(prev.lat, prev.lng, curr.lat, curr.lng);
+    const timeInterval = 0.3 / 3600;
+    return (distance / timeInterval).toFixed(2);
+  };
+
   // Extract coordinates for polylines
   const fullRouteCoords: [number, number][] = routeData.map(p => [p.lat, p.lng]);
   const traveledRouteCoords: [number, number][] = routeData.slice(0, currentIndex + 1).map(p => [p.lat, p.lng]);
 
+  const progress = routeData.length > 0 ? ((currentIndex + 1) / routeData.length) * 100 : 0;
+  const currentTime = new Date(currentPosition.timestamp).toLocaleTimeString();
+  const totalDistance = getTotalDistance();
+  const currentSpeed = getSpeed();
+
   if (loading) {
     return (
-      <div className="h-screen w-full flex items-center justify-center bg-gray-100">
+      <div className="h-screen w-screen overflow-hidden fixed inset-0 flex items-center justify-center bg-gradient-to-br from-blue-900 to-blue-800">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-lg text-gray-600">Loading route data...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="h-screen w-full flex items-center justify-center bg-gray-100">
-        <div className="text-center max-w-md mx-auto p-6">
-          <div className="text-red-600 text-6xl mb-4">⚠️</div>
-          <h2 className="text-2xl font-bold text-gray-800 mb-2">Error Loading Data</h2>
-          <p className="text-gray-600 mb-4">{error}</p>
-          <button 
-            onClick={() => window.location.reload()} 
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-          >
-            Retry
-          </button>
+          <div className="animate-spin rounded-full h-16 w-16 border-4 border-white border-t-blue-300 mx-auto mb-6"></div>
+          <p className="text-xl text-white font-semibold">Loading Route...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-screen w-full relative">
-      <MapContainer
-        center={INITIAL_CENTER}
-        zoom={15}
-        scrollWheelZoom={true}
-        className="h-full w-full z-0"
-      >
-        <TileLayer
-          attribution='&copy; <a href="http://osm.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        
-        {/* Full route path (planned route) */}
-        {routeData.length > 0 && (
-          <Polyline
-            pathOptions={{ color: 'gray', weight: 3, opacity: 0.5, dashArray: '10, 10' }}
-            positions={fullRouteCoords}
-          />
-        )}
-        
-        {/* Traveled route (completed path) */}
-        {traveledRouteCoords.length > 1 && (
-          <Polyline
-            pathOptions={{ color: '#ef4444', weight: 5, opacity: 0.8 }}
-            positions={traveledRouteCoords}
-          />
-        )}
-        
-        {/* Vehicle marker */}
-        {currentPosition && (
-          <Marker
-            position={[currentPosition.lat, currentPosition.lng]}
-            icon={vehicleIcon}
-          />
-        )}
-      </MapContainer>
-
-      {/* Control Panel */}
-      <div className="absolute top-4 right-4 z-[1000] p-4 bg-white shadow-xl rounded-lg w-full max-w-xs md:max-w-sm">
-        <h2 className="text-lg font-bold mb-3 text-gray-800">Vehicle Tracker</h2>
-        
-        {/* Progress bar */}
-        <div className="mb-4">
-          <div className="flex justify-between text-sm text-gray-600 mb-1">
-            <span>Progress</span>
-            <span>{currentIndex + 1} / {routeData.length}</span>
-          </div>
-          <div className="w-full bg-gray-200 rounded-full h-2">
-            <div 
-              className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-              style={{ width: `${((currentIndex + 1) / routeData.length) * 100}%` }}
-            ></div>
+    <div className="h-screen w-screen overflow-hidden fixed inset-0 flex bg-gray-100">
+      {/* Left Sidebar Panel */}
+      <div className="w-96 bg-white shadow-lg flex flex-col h-screen border-r border-gray-200 z-10">
+        {/* Header */}
+        <div className="bg-white px-6 py-5 shadow-sm border-b border-gray-200">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="text-2xl">🚗</div>
+            <div>
+              <h1 className="text-xl font-bold text-gray-800">Vehicle Tracker</h1>
+              <p className="text-xs text-gray-500">Real-time Tracking</p>
+            </div>
           </div>
         </div>
 
-        {/* Current status */}
-        {currentPosition && (
-          <div className="space-y-1 text-sm mb-4">
-            <p className="text-gray-700">
-              <span className="font-medium">Coordinates:</span>
-              <br />
-              <span className="font-mono text-blue-600 text-xs">
-                {currentPosition.lat.toFixed(6)}, {currentPosition.lng.toFixed(6)}
-              </span>
-            </p>
-            <p className="text-gray-700">
-              <span className="font-medium">Time:</span> {' '}
-              <span className="text-gray-600">
-                {currentPosition.timestamp ? new Date(currentPosition.timestamp).toLocaleTimeString() : 'N/A'}
-              </span>
-            </p>
-            <p className="text-gray-700">
-              <span className="font-medium">Speed:</span> {' '}
-              <span className="text-green-600 font-medium">
-                {calculateSpeedKmH(currentIndex, routeData)} km/h
-              </span>
-            </p>
-            <p className="text-gray-700">
-              <span className="font-medium">Total Distance:</span> {' '}
-              <span className="text-purple-600 font-medium">
-                {calculateTotalDistance(routeData)} km
-              </span>
-            </p>
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          
+          {/* Route Information */}
+          <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+            <h3 className="text-sm font-bold text-gray-800 mb-3">Route Details</h3>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">📍</span>
+                <div>
+                  <p className="text-xs text-gray-500">From</p>
+                  <p className="text-sm font-semibold text-gray-800">Koti</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-lg">🎯</span>
+                <div>
+                  <p className="text-xs text-gray-500">To</p>
+                  <p className="text-sm font-semibold text-gray-800">KPHB Colony</p>
+                </div>
+              </div>
+            </div>
           </div>
-        )}
 
-        {/* Controls */}
-        <div className="flex gap-2">
+          {/* Status Badge */}
+          <div className={`rounded-lg p-4 border ${
+            isPlaying 
+              ? 'bg-green-50 border-green-200' 
+              : 'bg-yellow-50 border-yellow-200'
+          }`}>
+            <div className="flex items-center gap-2">
+              <span className={`inline-flex items-center justify-center w-3 h-3 rounded-full ${
+                isPlaying ? 'bg-green-500 animate-pulse' : 'bg-yellow-500'
+              }`}></span>
+              <span className={`text-sm font-semibold ${
+                isPlaying 
+                  ? 'text-green-800' 
+                  : 'text-yellow-800'
+              }`}>
+                {isPlaying ? '🔴 Live Tracking' : '⏸️ Paused'}
+              </span>
+            </div>
+          </div>
+
+          {/* Progress Section */}
+          <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-bold text-gray-800">Progress</h3>
+              <span className="text-sm font-bold text-blue-600">{Math.round(progress)}%</span>
+            </div>
+            <div className="w-full h-2 bg-gray-300 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-blue-500 transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <p className="text-xs text-gray-500 mt-2">{currentIndex + 1} of {routeData.length} waypoints</p>
+          </div>
+
+          {/* Location Details */}
+          <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+            <h3 className="text-sm font-bold text-gray-800 mb-3">Current Location</h3>
+            <div className="space-y-2">
+              <div>
+                <p className="text-xs text-gray-500 font-semibold">LATITUDE</p>
+                <p className="text-sm font-mono text-gray-800 font-semibold">
+                  {currentPosition.lat.toFixed(6)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 font-semibold">LONGITUDE</p>
+                <p className="text-sm font-mono text-gray-800 font-semibold">
+                  {currentPosition.lng.toFixed(6)}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Statistics Grid */}
+          <div className="grid grid-cols-2 gap-3">
+            {/* Time */}
+            <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
+              <p className="text-xs text-gray-600 font-semibold mb-2">TIME</p>
+              <p className="text-sm font-bold text-purple-700">{currentTime}</p>
+            </div>
+            
+            {/* Speed */}
+            <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+              <p className="text-xs text-gray-600 font-semibold mb-2">SPEED</p>
+              <p className="text-sm font-bold text-green-700">{currentSpeed}<span className="text-xs"> km/h</span></p>
+            </div>
+          </div>
+
+          {/* Distance */}
+          <div className="bg-orange-50 rounded-lg p-4 border border-orange-200">
+            <p className="text-xs text-gray-600 font-semibold mb-2">TOTAL DISTANCE</p>
+            <p className="text-2xl font-bold text-orange-700">{totalDistance.toFixed(2)}<span className="text-sm"> km</span></p>
+          </div>
+        </div>
+
+        {/* Controls Section */}
+        <div className="bg-white border-t border-gray-200 px-6 py-4 space-y-3">
           <button
             onClick={togglePlay}
-            disabled={routeData.length === 0}
-            className={`flex-1 px-4 py-2 text-white font-semibold rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed ${
+            className={`w-full py-3 px-4 rounded-lg font-bold text-white transition-all duration-200 ${
               isPlaying 
-                ? 'bg-red-500 hover:bg-red-600' 
-                : 'bg-green-500 hover:bg-green-600'
+                ? 'bg-red-500 hover:bg-red-600 shadow-md' 
+                : 'bg-green-500 hover:bg-green-600 shadow-md'
             }`}
           >
-            {isPlaying ? '⏸️ Pause' : '▶️ Play'}
+            {isPlaying ? '⏸️ PAUSE' : '▶️ PLAY'}
           </button>
+          
           <button
             onClick={resetSimulation}
-            disabled={routeData.length === 0}
-            className="px-4 py-2 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-3 px-4 bg-gray-500 hover:bg-gray-600 text-white font-bold rounded-lg transition-all duration-200 shadow-md"
           >
-            🔄 Reset
+            🔄 RESET
           </button>
         </div>
+      </div>
 
-        {/* Status indicator */}
-        <div className="mt-3 pt-3 border-t border-gray-200">
-          <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-            <span className="text-xs text-gray-600">
-              {isPlaying ? 'Simulation Running' : 'Simulation Paused'}
-            </span>
-          </div>
-          {currentIndex >= routeData.length - 1 && !isPlaying && (
-            <p className="text-xs text-blue-600 mt-1">✅ Route completed!</p>
+      {/* Map Container */}
+      <div className="flex-1 relative">
+        <MapContainer
+          center={INITIAL_CENTER}
+          zoom={14}
+          scrollWheelZoom={true}
+          className="h-full w-full"
+        >
+          <TileLayer
+            attribution='&copy; <a href="http://osm.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          
+          {/* Full route path */}
+          <Polyline
+            pathOptions={{ color: '#cbd5e1', weight: 4, opacity: 0.5, dashArray: '8, 8' }}
+            positions={fullRouteCoords}
+          />
+          
+          {/* Traveled route */}
+          {traveledRouteCoords.length > 1 && (
+            <Polyline
+              pathOptions={{ color: '#dc2626', weight: 6, opacity: 0.9 }}
+              positions={traveledRouteCoords}
+            />
           )}
-        </div>
+
+          {/* Start marker */}
+          <Marker position={[routeData[0].lat, routeData[0].lng]} icon={startIcon}>
+            <Popup>📍 Start: Koti</Popup>
+          </Marker>
+
+          {/* End marker */}
+          <Marker position={[routeData[routeData.length - 1].lat, routeData[routeData.length - 1].lng]} icon={endIcon}>
+            <Popup>🎯 Destination: KPHB Colony</Popup>
+          </Marker>
+          
+          {/* Vehicle marker */}
+          <Marker position={[currentPosition.lat, currentPosition.lng]} icon={vehicleIcon}>
+            <Popup>🚗 Vehicle</Popup>
+          </Marker>
+        </MapContainer>
       </div>
     </div>
   );
