@@ -43,7 +43,9 @@ const VehicleMap: React.FC<VehicleMapProps> = () => {
     const loadData = async () => {
       try {
         setLoading(true);
-        const response = await fetch('/dummy-route.json');
+        // Use import.meta.env.BASE_URL for correct path in both dev and production
+        const baseUrl = import.meta.env.BASE_URL || '/';
+        const response = await fetch(`${baseUrl}dummy-route.json`);
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -60,7 +62,39 @@ const VehicleMap: React.FC<VehicleMapProps> = () => {
         setError(null);
       } catch (error) {
         console.error("Error loading route data:", error);
-        setError("Failed to load route data. Please check if dummy-route.json exists in the public folder.");
+        // Try fallback path if the first attempt fails
+        try {
+          const fallbackResponse = await fetch('./dummy-route.json');
+          if (fallbackResponse.ok) {
+            const fallbackData = await fallbackResponse.json();
+            const transformedData: RoutePoint[] = fallbackData.map((p: any) => ({
+              lat: p.latitude,
+              lng: p.longitude,
+              timestamp: p.timestamp
+            }));
+            setRouteData(transformedData);
+            setError(null);
+            return;
+          }
+        } catch (fallbackError) {
+          console.error("Fallback also failed:", fallbackError);
+        }
+        setError("Failed to load route data. The application will use sample data instead.");
+        
+        // Use embedded sample data as last resort
+        const sampleData: RoutePoint[] = [
+          { lat: 17.385044, lng: 78.486671, timestamp: "2024-07-20T10:00:00Z" },
+          { lat: 17.385200, lng: 78.486800, timestamp: "2024-07-20T10:00:10Z" },
+          { lat: 17.385450, lng: 78.487100, timestamp: "2024-07-20T10:00:20Z" },
+          { lat: 17.385680, lng: 78.487350, timestamp: "2024-07-20T10:00:30Z" },
+          { lat: 17.385850, lng: 78.487580, timestamp: "2024-07-20T10:00:40Z" },
+          { lat: 17.386020, lng: 78.487800, timestamp: "2024-07-20T10:00:50Z" },
+          { lat: 17.386180, lng: 78.488050, timestamp: "2024-07-20T10:01:00Z" },
+          { lat: 17.386350, lng: 78.488250, timestamp: "2024-07-20T10:01:10Z" },
+          { lat: 17.386520, lng: 78.488480, timestamp: "2024-07-20T10:01:20Z" },
+          { lat: 17.386680, lng: 78.488720, timestamp: "2024-07-20T10:01:30Z" }
+        ];
+        setRouteData(sampleData);
       } finally {
         setLoading(false);
       }
